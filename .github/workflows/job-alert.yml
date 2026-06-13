@@ -2,11 +2,17 @@ name: Daily job alert
 
 on:
   schedule:
-    - cron: "0 3 * * *"   # 3:00 AM UTC = 9:00 AM BDT
+    - cron: "0 3 * * *"     # 3:00 AM UTC = 9:00 AM BDT, every day  -> daily new
+    - cron: "30 4 * * 5"    # 4:30 AM UTC Friday = 10:30 AM BDT Fri -> weekly sweep
   workflow_dispatch:
+    inputs:
+      mode:
+        description: "Run mode: daily or weekly"
+        required: false
+        default: "daily"
 
 permissions:
-  contents: write          # allows the workflow to save seen_jobs.json back to the repo
+  contents: write
 
 jobs:
   job-alert:
@@ -18,6 +24,17 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Decide mode
+        id: mode
+        run: |
+          if [ "${{ github.event.schedule }}" = "30 4 * * 5" ]; then
+            echo "value=weekly" >> "$GITHUB_OUTPUT"
+          elif [ -n "${{ github.event.inputs.mode }}" ]; then
+            echo "value=${{ github.event.inputs.mode }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=daily" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Run job alert script
         env:
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
@@ -25,6 +42,7 @@ jobs:
           GREENAPI_INSTANCE: ${{ secrets.GREENAPI_INSTANCE }}
           GREENAPI_TOKEN: ${{ secrets.GREENAPI_TOKEN }}
           WHATSAPP_NUMBER: ${{ secrets.WHATSAPP_NUMBER }}
+          MODE: ${{ steps.mode.outputs.value }}
         run: python job_alert.py
 
       - name: Save memory of seen jobs
