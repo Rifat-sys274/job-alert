@@ -1,0 +1,36 @@
+name: Daily job alert
+
+on:
+  schedule:
+    - cron: "0 3 * * *"   # 3:00 AM UTC = 9:00 AM BDT
+  workflow_dispatch:
+
+permissions:
+  contents: write          # allows the workflow to save seen_jobs.json back to the repo
+
+jobs:
+  job-alert:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run job alert script
+        env:
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          GOOGLE_CSE_ID: ${{ secrets.GOOGLE_CSE_ID }}
+          GREENAPI_INSTANCE: ${{ secrets.GREENAPI_INSTANCE }}
+          GREENAPI_TOKEN: ${{ secrets.GREENAPI_TOKEN }}
+          WHATSAPP_NUMBER: ${{ secrets.WHATSAPP_NUMBER }}
+        run: python job_alert.py
+
+      - name: Save memory of seen jobs
+        run: |
+          git config user.name "job-alert-bot"
+          git config user.email "bot@users.noreply.github.com"
+          git add seen_jobs.json
+          git diff --cached --quiet || git commit -m "update seen jobs"
+          git push
