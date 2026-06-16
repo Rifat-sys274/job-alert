@@ -2,8 +2,8 @@ name: Daily job alert
 
 on:
   schedule:
-    - cron: "0 3 * * *"     # 3:00 AM UTC = 9:00 AM BDT, every day  -> daily new
-    - cron: "30 4 * * 5"    # 4:30 AM UTC Friday = 10:30 AM BDT Fri -> weekly sweep
+    - cron: "0 3 * * *"     # 9:00 AM BDT daily -> daily new
+    - cron: "30 4 * * 5"    # 10:30 AM BDT Friday -> weekly sweep
   workflow_dispatch:
     inputs:
       mode:
@@ -24,6 +24,9 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Install dependencies
+        run: pip install ddgs
+
       - name: Decide mode
         id: mode
         run: |
@@ -37,8 +40,6 @@ jobs:
 
       - name: Run job alert script
         env:
-          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
-          GOOGLE_CSE_ID: ${{ secrets.GOOGLE_CSE_ID }}
           GREENAPI_INSTANCE: ${{ secrets.GREENAPI_INSTANCE }}
           GREENAPI_TOKEN: ${{ secrets.GREENAPI_TOKEN }}
           WHATSAPP_NUMBER: ${{ secrets.WHATSAPP_NUMBER }}
