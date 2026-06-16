@@ -1,30 +1,28 @@
 """
 Job hunt alert for internships / MTO / graduate / entry-level roles in Bangladesh.
+Uses DuckDuckGo for search (no API key, no signup, no billing).
 
-Two modes (controlled by the MODE env var the workflow sets):
-  - "daily"  : send only NEW postings since last run (quiet on slow days)
-  - "weekly" : send EVERYTHING currently open (full sweep, ignores memory)
+Modes (set by MODE env var in the workflow):
+  "daily"  : send only NEW postings since last run
+  "weekly" : send EVERYTHING currently found (full sweep, ignores memory)
 
 Required environment variables (GitHub Secrets):
-  GOOGLE_API_KEY     - Google Cloud, Custom Search API enabled
-  GOOGLE_CSE_ID      - Programmable Search Engine ID (cx)
-  GREENAPI_INSTANCE  - same as before
-  GREENAPI_TOKEN     - same as before
-  WHATSAPP_NUMBER    - digits only, e.g. 8801XXXXXXXXX
+  GREENAPI_INSTANCE
+  GREENAPI_TOKEN
+  WHATSAPP_NUMBER   (digits only, e.g. 8801XXXXXXXXX)
 Optional:
-  MODE               - "daily" (default) or "weekly"
+  MODE             ("daily" default, or "weekly")
 """
 
 import os
 import sys
 import json
 import time
-import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
-GOOGLE_API_KEY = os.environ["GOOGLE_API_KEY"]
-GOOGLE_CSE_ID = os.environ["GOOGLE_CSE_ID"]
+from ddgs import DDGS
+
 GREENAPI_INSTANCE = os.environ["GREENAPI_INSTANCE"]
 GREENAPI_TOKEN = os.environ["GREENAPI_TOKEN"]
 WHATSAPP_NUMBER = os.environ["WHATSAPP_NUMBER"]
@@ -32,26 +30,22 @@ MODE = os.environ.get("MODE", "daily").lower()
 
 SEEN_FILE = "seen_jobs.json"
 BDT = timezone(timedelta(hours=6))
-
 MAX_CHARS_PER_MESSAGE = 3500
 MAX_ITEMS = 60
+RESULTS_PER_QUERY = 8
 
 QUERIES = [
-    'internship Bangladesh 2026 business OR finance OR marketing',
-    '"intern" Dhaka 2026 -unpaid',
-    'site:bdjobs.com intern 2026',
-    'site:linkedin.com/jobs internship Bangladesh',
-    'site:nextjobz.com.bd intern OR internship',
-    '"management trainee" Bangladesh 2026',
-    '"graduate programme" OR "graduate program" OR "graduate trainee" Bangladesh 2026',
-    'Unilever ULIP OR UFLP Bangladesh',
-    'BAT Bangladesh "global graduate"',
-    'Nestle OR Marico OR Reckitt OR "L\'Oreal" "management trainee" Bangladesh',
-    'bKash OR Grameenphone OR Robi OR "Standard Chartered" OR HSBC graduate trainee Bangladesh',
-    'site:bdjobs.com "fresh graduate" OR "entry level" 2026',
-    'site:skill.jobs management trainee OR intern OR graduate',
-    '"entry level" OR "fresh graduate" finance OR marketing Dhaka 2026',
-    'site:linkedin.com/jobs "entry level" Bangladesh business',
+    'internship Bangladesh 2026 business finance marketing',
+    'intern Dhaka 2026',
+    'management trainee Bangladesh 2026',
+    'graduate trainee programme Bangladesh 2026',
+    'Unilever ULIP UFLP Bangladesh',
+    'BAT Bangladesh global graduate',
+    'Nestle Marico Reckitt management trainee Bangladesh',
+    'bKash Grameenphone Standard Chartered graduate trainee Bangladesh',
+    'fresh graduate entry level finance marketing Dhaka 2026',
+    'bdjobs management trainee intern 2026',
+    'nextjobz intern graduate Bangladesh',
 ]
 
 RELEVANCE_WORDS = [
@@ -59,37 +53,34 @@ RELEVANCE_WORDS = [
     "fresh", "entry level", "entry-level", "early career", "junior",
     "management trainee", "fresher",
 ]
-
 EXCLUDE_WORDS = [
-    "india", "pakistan", "experienced only", "5+ years", "senior manager",
+    "india", "pakistan", "5+ years", "senior manager", "10+ years",
 ]
 
 
-def google_search(query, want_recent):
-    params = {
-        "key": GOOGLE_API_KEY,
-        "cx": GOOGLE_CSE_ID,
-        "q": query,
-        "num": 10,
-        "gl": "bd",
-    }
-    if want_recent:
-        params["dateRestrict"] = "d7"
-    url = "https://www.googleapis.com/customsearch/v1?" + urllib.parse.urlencode(params)
-    try:
-        with urllib.request.urlopen(url, timeout=30) as resp:
-            data = json.loads(resp.read().decode())
-        return data.get("items", [])
-    except Exception as e:
-        print(f"Search failed for [{query}]: {e}")
-        return []
-
-
-def is_relevant(title, snippet):
-    text = (title + " " + snippet).lower()
-    if any(bad in text for bad in EXCLUDE_WORDS):
-        return False
-    return any(w in text for w in RELEVANCE_WORDS)
+def search_all():
+    found = {}
+    with DDGS() as ddgs:
+        for q in QUERIES:
+            try:
+                for r in ddgs.text(q, region="xa-en", max_results=RESULTS_PER_QUERY):
+                    title = (r.get("title") or "").strip()
+                    link = (r.get("href") or "").strip()
+                    body = (r.get("body") or "")
+                    if not link:
+                        continue
+                    text = (title + " " + body).lower()
+                    if any(b in text for b in EXCLUDE_WORDS):
+                        continue
+                    if not any(w in text for w in RELEVANCE_WORDS):
+                        continue
+                    key = link.split("?")[0].rstrip("/").lower()
+                    if key not in found:
+                        found[key] = {"title": title, "link": link}
+            except Exception as e:
+                print(f"Search failed for [{q}]: {e}")
+            time.sleep(1.0)  # be gentle, reduce rate-limiting
+    return found
 
 
 def load_seen():
@@ -104,25 +95,8 @@ def save_seen(seen):
         json.dump(sorted(seen), f, indent=1)
 
 
-def normalize(link):
+def norm(link):
     return link.split("?")[0].rstrip("/").lower()
-
-
-def collect():
-    want_recent = (MODE == "daily")
-    found = {}
-    for q in QUERIES:
-        for item in google_search(q, want_recent):
-            link = item.get("link", "")
-            title = item.get("title", "").strip()
-            snippet = item.get("snippet", "")
-            if not link or not is_relevant(title, snippet):
-                continue
-            key = normalize(link)
-            if key not in found:
-                found[key] = {"title": title, "link": link}
-        time.sleep(0.3)
-    return found
 
 
 def send_whatsapp(text):
@@ -131,19 +105,14 @@ def send_whatsapp(text):
         f"/sendMessage/{GREENAPI_TOKEN}"
     )
     payload = json.dumps({"chatId": f"{WHATSAPP_NUMBER}@c.us", "message": text}).encode()
-    req = urllib.request.Request(
-        url, data=payload, headers={"Content-Type": "application/json"}
-    )
+    req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=30) as resp:
         print("Green API response:", resp.read().decode())
     time.sleep(1.5)
 
 
 def send_in_chunks(header, jobs):
-    blocks = []
-    for i, job in enumerate(jobs, 1):
-        blocks.append(f"{i}. {job['title']}\n{job['link']}")
-
+    blocks = [f"{i}. {j['title']}\n{j['link']}" for i, j in enumerate(jobs, 1)]
     current = header + "\n\n"
     part = 1
     for block in blocks:
@@ -158,23 +127,23 @@ def send_in_chunks(header, jobs):
 
 def main():
     today = datetime.now(BDT).strftime("%d %b %Y")
-    found = collect()
+    found = search_all()
     items = list(found.values())[:MAX_ITEMS]
 
     if MODE == "weekly":
         if not items:
             print("Weekly sweep found nothing.")
             return
-        header = f"*Weekly job sweep* ({today}) - {len(items)} open roles:"
+        header = f"*Weekly job sweep* ({today}) - {len(items)} roles:"
         send_in_chunks(header, items)
-        save_seen({normalize(j["link"]) for j in items})
-        print(f"Weekly: sent {len(items)} roles.")
+        save_seen({norm(j["link"]) for j in items})
+        print(f"Weekly: sent {len(items)}.")
         return
 
     seen = load_seen()
-    new_items = [j for j in items if normalize(j["link"]) not in seen]
+    new_items = [j for j in items if norm(j["link"]) not in seen]
     for j in new_items:
-        seen.add(normalize(j["link"]))
+        seen.add(norm(j["link"]))
     save_seen(seen)
 
     if not new_items:
@@ -182,7 +151,7 @@ def main():
         return
     header = f"*New job alerts* ({today}) - {len(new_items)} new:"
     send_in_chunks(header, new_items)
-    print(f"Daily: sent {len(new_items)} new postings.")
+    print(f"Daily: sent {len(new_items)} new.")
 
 
 if __name__ == "__main__":
